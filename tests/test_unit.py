@@ -262,3 +262,29 @@ def test_unmapped_value_fails_with_a_readable_message():
         build_variables({"p": "{{priority}}"}, {"priority": {"high": 2}},
                         {"priority": "bogus"}, {})
     assert "known values" in str(exc.value)
+
+
+def test_step_name_placeholders_resolve_to_the_value_they_produced():
+    """A synthesized template referencing {resolve_team} reached the API as
+    literal text and failed as 'eq must be a UUID'."""
+    from agent.synthesizer import build_variables
+    out = build_variables(
+        {"filter": {"team": {"id": {"eq": "{resolve_team}"}}}},
+        {}, {}, {"team_id": "a186-uuid"},
+    )
+    assert out["filter"]["team"]["id"]["eq"] == "a186-uuid"
+
+
+def test_single_and_double_brace_placeholders_both_bind():
+    from agent.synthesizer import build_variables
+    ctx = {"issue_id": "abc"}
+    assert build_variables({"id": "{{issue_id}}"}, {}, {}, ctx)["id"] == "abc"
+    assert build_variables({"id": "{issue_id}"}, {}, {}, ctx)["id"] == "abc"
+
+
+def test_unresolvable_placeholder_names_what_was_available():
+    from agent.synthesizer import build_variables
+    from agent.adapters.linear import LinearError
+    with pytest.raises(LinearError) as exc:
+        build_variables({"id": "{{nope}}"}, {}, {}, {"team_id": "x"})
+    assert "available" in str(exc.value)

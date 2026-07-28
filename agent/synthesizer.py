@@ -130,10 +130,13 @@ def _substitute(node: Any, resolve) -> Any:
     if isinstance(node, list):
         return [_substitute(v, resolve) for v in node]
     if isinstance(node, str):
-        exact = re.fullmatch(r"\{\{\s*([\w.]+)\s*\}\}", node)
+        # Single braces are accepted as well as double. Models emit either, and a
+        # placeholder that survives substitution reaches the API as literal text,
+        # where it fails as an unreadable type error rather than a missing value.
+        exact = re.fullmatch(r"\{\{?\s*([\w.]+)\s*\}?\}", node)
         if exact:
             return resolve(exact.group(1))
-        return re.sub(r"\{\{\s*([\w.]+)\s*\}\}", lambda m: str(resolve(m.group(1))), node)
+        return re.sub(r"\{\{?\s*([\w.]+)\s*\}?\}", lambda m: str(resolve(m.group(1))), node)
     return node
 
 
@@ -166,13 +169,37 @@ def build_variables(
     template: dict, value_maps: dict, params: dict, ctx: dict
 ) -> dict:
     """Deterministic binding of a synthesized capability's variables."""
-    def resolve(name: str):
+    # Models frequently reference the STEP that produced a value rather than the
+    # value itself, writing {resolve_team} where the context key is team_id. Left
+    # unresolved that reaches the API as literal text and fails as a type error,
+    # so the common shapes are mapped rather than rejected.
+    step_aliases = {
+        "resolve_team": "team_id",
+        "resolve_label": "label_ids",
+        "resolve_labels": "label_ids",
+        "create_issue": "issue_id",
+    }
+
+    def lookup(name: str):
         if name in params and params[name] is not None:
-            value = params[name]
-        elif name in ctx:
-            value = ctx[name]
-        else:
-            raise LinearError(f"missing value for '{name}'")
+            return params[name], True
+        if name in ctx:
+            return ctx[name], True
+        alias = step_aliases.get(name)
+        if alias and alias in ctx:
+            return ctx[alias], True
+        if f"{name}_id" in ctx:
+            return ctx[f"{name}_id"], True
+        if f"{name}::results" in ctx:
+            return ctx[f"{name}::results"], True
+        return None, False
+
+    def resolve(name: str):
+        value, found = lookup(name)
+        if not found:
+            raise LinearError(
+                f"missing value for '{name}' (available: {sorted(ctx)[:8]})"
+            )
         mapping = value_maps.get(name)
         if mapping and isinstance(value, str):
             mapped = _map_value(value, mapping)
