@@ -137,6 +137,31 @@ def _substitute(node: Any, resolve) -> Any:
     return node
 
 
+# Words that qualify a value without changing it: 'high priority' means 'high'.
+_FILLER = re.compile(r"\b(priority|level|urgency|severity|importance|the|a|an)\b", re.I)
+
+
+def _map_value(value: str, mapping: dict):
+    """Look a word up in a synthesized value map, tolerantly.
+
+    The planner writes the phrasing a person used — 'high priority', 'Urgent!' —
+    while the map is keyed on the bare word. An exact-match-only lookup passes the
+    phrase straight through to the API, which then rejects it as the wrong type.
+    """
+    candidates = []
+    raw = value.strip().lower()
+    candidates.append(raw)
+    stripped = re.sub(r"[^a-z0-9 ]+", " ", _FILLER.sub(" ", raw)).strip()
+    stripped = re.sub(r"\s+", " ", stripped)
+    candidates.append(stripped)
+    if stripped:
+        candidates.append(stripped.split()[0])
+    for candidate in candidates:
+        if candidate and candidate in mapping:
+            return mapping[candidate]
+    return None
+
+
 def build_variables(
     template: dict, value_maps: dict, params: dict, ctx: dict
 ) -> dict:
@@ -150,9 +175,17 @@ def build_variables(
             raise LinearError(f"missing value for '{name}'")
         mapping = value_maps.get(name)
         if mapping and isinstance(value, str):
-            key = value.strip().lower()
-            if key in mapping:
-                return mapping[key]
+            mapped = _map_value(value, mapping)
+            if mapped is not None:
+                return mapped
+            # The map exists and holds typed values, so an unmatched word would be
+            # sent as a string and rejected by the schema with an opaque type
+            # error. Say which words are known instead.
+            if any(not isinstance(v, str) for v in mapping.values()):
+                raise LinearError(
+                    f"'{value}' is not a recognised value for '{name}' — "
+                    f"known values: {', '.join(sorted(mapping))}"
+                )
         return value
 
     return _substitute(template, resolve)

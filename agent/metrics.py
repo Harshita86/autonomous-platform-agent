@@ -47,14 +47,22 @@ def before_after(memory: MemoryStore, signature: str) -> str:
         f"{'run':>4}  {'api':>4}  {'llm':>4}  {'ms':>6}  {'outcome':<8}  plan shape",
         f"{'-'*4}  {'-'*4}  {'-'*4}  {'-'*6}  {'-'*8}  {'-'*40}",
     ]
+    # Long histories are for querying, not for reading aloud: show the opening
+    # runs and the recent ones, and say how many were elided.
+    shown = set(range(1, 4)) | set(range(len(rows) - 7, len(rows) + 1))
     groups: dict[str, list] = {}
+    elided = False
     for i, r in enumerate(rows, 1):
         shape = _shape(r["plan_json"])
         llm = r["llm_calls"] if "llm_calls" in r.keys() else 0
-        lines.append(
-            f"{i:>4}  {r['api_calls']:>4}  {llm:>4}  {r['latency_ms']:>6}  "
-            f"{r['outcome']:<8}  {shape}"
-        )
+        if i in shown or len(rows) <= 12:
+            lines.append(
+                f"{i:>4}  {r['api_calls']:>4}  {llm:>4}  {r['latency_ms']:>6}  "
+                f"{r['outcome']:<8}  {shape}"
+            )
+        elif not elided:
+            elided = True
+            lines.append(f"{'':>4}  {'':>4}  {'':>4}  {'':>6}  … {len(rows) - 11} runs elided")
         if r["outcome"] == "success":
             groups.setdefault(shape, []).append(r)
 
@@ -90,13 +98,14 @@ def before_after(memory: MemoryStore, signature: str) -> str:
             "→ Learned: the decomposition itself is remembered — a proven plan is "
             "reused for this instruction shape, so no LLM reasoning is needed."
         )
+    improved = llm_of(last) < llm_of(first)
     if last["api_calls"] < first["api_calls"]:
         saved = first["api_calls"] - last["api_calls"]
         lines.append(
             f"→ Learned: {saved} fewer API call(s) per run — name→id resolutions were "
             f"cached in semantic memory, so lookups are no longer repeated."
         )
-    else:
+    elif not improved:
         lines.append(
             "→ No reduction on this plan shape yet (the first run already ran fully "
             "warm, or the cache was cleared)."

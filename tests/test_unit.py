@@ -242,3 +242,23 @@ def test_for_each_pointing_at_a_retrieval_is_kept():
         PlanStep(id="1", capability="set_issue_priority", for_each="find_unassigned_bugs"),
     ]
     assert _valid_for_each(steps)[1].for_each == "find_unassigned_bugs"
+
+
+def test_value_map_tolerates_the_phrasing_a_planner_uses():
+    """'high priority' reached the API as a string where an Int was expected,
+    because the map is keyed on the bare word."""
+    from agent.synthesizer import _map_value
+    m = {"urgent": 1, "high": 2, "medium": 3, "low": 4}
+    assert _map_value("high priority", m) == 2
+    assert _map_value("High Priority", m) == 2
+    assert _map_value("Urgent!", m) == 1
+    assert _map_value("bogus", m) is None
+
+
+def test_unmapped_value_fails_with_a_readable_message():
+    from agent.synthesizer import build_variables
+    from agent.adapters.linear import LinearError
+    with pytest.raises(LinearError) as exc:
+        build_variables({"p": "{{priority}}"}, {"priority": {"high": 2}},
+                        {"priority": "bogus"}, {})
+    assert "known values" in str(exc.value)
