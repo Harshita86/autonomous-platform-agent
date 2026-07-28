@@ -360,6 +360,8 @@ class Synthesizer:
                 self._test(proposal, step, ctx)
             except Exception as exc:  # noqa: BLE001 — failed test = not registered
                 self.log.append(f"  attempt {attempt}: TEST FAILED — {exc}")
+                if self._record_permission_boundary(name, proposal, exc):
+                    return False  # a boundary is not something retrying can fix
                 feedback = (
                     f"The operation you produced failed when executed against the real "
                     f"Linear API with this error: {exc}. Fix it."
@@ -393,6 +395,35 @@ class Synthesizer:
 
         self.log.append(f"  gave up after {self._attempts} attempts")
         return False
+
+    _FORBIDDEN = re.compile(
+        r"forbidden|access denied|not authori[sz]ed|permission|upgrade to|"
+        r"limit of .* allowed|plan",
+        re.I,
+    )
+
+    def _record_permission_boundary(self, name: str, proposal: dict, exc: Exception) -> bool:
+        """Remember a boundary the account cannot cross.
+
+        A validation error is worth retrying with better arguments; a permission or
+        plan limit is not — no rewording of the operation will make it succeed. It
+        is recorded so later runs can refuse immediately instead of spending
+        attempts rediscovering it, and so the limit is visible in memory.
+        """
+        message = str(exc)
+        if not self._FORBIDDEN.search(message):
+            return False
+        operation = proposal.get("operation_name") or name
+        self._m.put_constraint(
+            key=f"linear.permission.{operation}",
+            kind="permission",
+            value=f"denied for this account: {message[:200]}",
+        )
+        self.log.append(
+            f"  recorded a permission boundary for '{operation}' — retrying cannot "
+            f"fix an account limit, so synthesis stops here"
+        )
+        return True
 
     # --- transform synthesis ---
     @staticmethod
