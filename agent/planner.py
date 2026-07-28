@@ -51,7 +51,9 @@ RULES
   (snake_case name starting with find_, e.g. find_unassigned_bug_issues) and then
   the action step with "for_each": "<the retrieval step's capability name>". The
   action runs once per result; do not guess how many results there will be, and do
-  not emit one step per issue.
+  not emit one step per issue. for_each may ONLY name a find_ step. Never point it
+  at create_issue or any other step that produces a single entity — the id of a
+  freshly created entity is wired to the next step automatically.
 - To produce a summary / report / digest page: use exactly THREE steps —
   (1) a find_ step to retrieve the rows,
   (2) ONE shaping step (e.g. summarize_issues_by_priority) that both groups and
@@ -291,6 +293,27 @@ def _is_shaping(name: str) -> bool:
     return any(w in lname for w in _SHAPING_WORDS)
 
 
+_RETRIEVAL_PREFIXES = ("find", "search", "list", "get_", "query", "fetch")
+
+
+def _valid_for_each(steps: list[PlanStep]) -> list[PlanStep]:
+    """Drop a for_each that names a step producing no result set.
+
+    Iteration only makes sense over a retrieval. A model that has been told to
+    pair 'find' with 'for_each' will sometimes point it at create_issue instead,
+    which creates a single entity — the step then finds nothing to iterate and the
+    whole run rolls back, even though the work was expressible without iteration.
+    """
+    producers = {
+        s.capability for s in steps
+        if s.capability.lower().startswith(_RETRIEVAL_PREFIXES)
+    }
+    for step in steps:
+        if step.for_each and step.for_each not in producers:
+            step.for_each = None
+    return steps
+
+
 def _infer_for_each(steps: list[PlanStep]) -> list[PlanStep]:
     """Bind mutations to a preceding retrieval when the plan implies it.
 
@@ -510,7 +533,7 @@ class Planner:
                 )
             )
 
-        steps = _order_steps(_infer_for_each(steps))
+        steps = _order_steps(_infer_for_each(_valid_for_each(steps)))
 
         if not steps:
             raise PlanningUnavailable(

@@ -221,3 +221,24 @@ def test_reuse_rebinds_values_inside_list_parameters():
     assert reused.steps[0].params["name"] == "Improvement"
     assert reused.steps[1].params["labels"] == ["Improvement"]
     assert reused.steps[1].params["title"] == "cold probe"
+
+
+def test_for_each_pointing_at_a_single_create_is_dropped():
+    """A model told to pair find with for_each sometimes points it at create_issue,
+    which produces one entity and no set — the run then rolled back needlessly."""
+    from agent.planner import _valid_for_each
+    steps = [
+        PlanStep(id="0", capability="create_issue", params={"title": "x"}),
+        PlanStep(id="1", capability="set_issue_priority", for_each="create_issue"),
+    ]
+    out = _valid_for_each(steps)
+    assert out[1].for_each is None
+
+
+def test_for_each_pointing_at_a_retrieval_is_kept():
+    from agent.planner import _valid_for_each
+    steps = [
+        PlanStep(id="0", capability="find_unassigned_bugs"),
+        PlanStep(id="1", capability="set_issue_priority", for_each="find_unassigned_bugs"),
+    ]
+    assert _valid_for_each(steps)[1].for_each == "find_unassigned_bugs"
