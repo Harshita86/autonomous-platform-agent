@@ -77,6 +77,10 @@ RULES
   Express conditions through the filter input (e.g. `{ assignee: { null: true } }`,
   `{ labels: { name: { eq: "Bug" } } }`, `{ state: { type: { neq: "completed" } } }`).
   Pass the whole filter object as one variable and cap results with `first: 50`.
+- Identifiers must come from runtime context keys, never from caller parameters.
+  A parameter like team or label holds a human-readable NAME; the matching id is
+  already resolved and available as a context key such as team_id, label_ids or
+  issue_id. Any field the schema types as an ID or UUID must be filled from those.
 - Do not invent fields. If the candidates cannot express the purpose, return
   {"error": "<why>"}."""
 
@@ -366,6 +370,15 @@ class Synthesizer:
                     f"The operation you produced failed when executed against the real "
                     f"Linear API with this error: {exc}. Fix it."
                 )
+                # A UUID complaint is the one error a model reliably repeats: it
+                # keeps sending the human-readable name it was given. Say plainly
+                # where the id actually is, or the remaining attempts are wasted.
+                if "isUuid" in str(exc) or "must be a UUID" in str(exc):
+                    feedback += (
+                        " The value you sent is a NAME, not an id. Use the matching "
+                        f"context key instead — available now: {sorted(ctx.keys())}. "
+                        "For example use {{team_id}} rather than {{team}}."
+                    )
                 continue
 
             version = self._r.register_synthesized(

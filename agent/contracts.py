@@ -77,6 +77,26 @@ class IntentSignature(BaseModel):
         return f"{self.action}:{self.entity}:{','.join(self.modifiers)}"
 
 
+def _as_text(value: Any) -> str:
+    """Flatten a described field to text.
+
+    Models describe an input either as a name or as a small object
+    ({"name": "team_id", "type": "string", "description": ...}). Both are
+    reasonable answers to 'what does this capability need', so both are accepted
+    and normalised rather than rejected — this is documentation for the
+    synthesizer, and being strict about its shape only loses information.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        name = value.get("name") or value.get("field") or ""
+        detail = value.get("description") or value.get("type") or ""
+        return f"{name}: {detail}".strip(": ").strip() or str(value)
+    if isinstance(value, list):
+        return ", ".join(_as_text(v) for v in value)
+    return str(value)
+
+
 class CapabilitySpec(BaseModel):
     """What a *missing* capability would need to do. Emitted by the planner when
     it names a capability the registry doesn't have — the input to synthesis."""
@@ -84,6 +104,20 @@ class CapabilitySpec(BaseModel):
     purpose: str = ""
     inputs: list[str] = Field(default_factory=list)
     output: str = ""
+
+    @field_validator("purpose", "output", mode="before")
+    @classmethod
+    def _coerce_text(cls, value: Any) -> str:
+        return _as_text(value) if value is not None else ""
+
+    @field_validator("inputs", mode="before")
+    @classmethod
+    def _coerce_inputs(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            value = [value]
+        return [_as_text(v) for v in value]
 
 
 class PlanStep(BaseModel):

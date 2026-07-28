@@ -31,8 +31,11 @@ RULES
 - Prefer an available capability whenever one fits. The catalogue is ordered
   best-first and each entry carries a reliability status; never choose one
   marked 'unreliable' if another fits.
-- Names must be resolved to ids before use: to create an issue you must first
-  resolve_team, and resolve_label for each label.
+- Names must be resolved to ids before use, and this applies to EVERY entity that
+  belongs to a team, not just issues: projects, cycles and issues all need a
+  resolve_team step first, and resolve_label for each label. If you are creating
+  something that lives inside a team, resolve the team even when the instruction
+  does not mention one — use the default team from KNOWN ENVIRONMENT.
 - Parameters carry literal values, never references to other steps. Write
   "labels": ["Bug"], not "labels": ["{{resolve_label}}"] — resolved ids are wired
   through automatically. The one exception is the summary placeholder below.
@@ -485,14 +488,24 @@ class Planner:
             if name == "create_issue" and not params.get("team"):
                 params["team"] = self._default_team
 
+            # The spec is documentation for the synthesizer, not something that
+            # runs. An unexpected shape must degrade to 'no spec', never abort a
+            # plan that is otherwise sound.
             spec = s.get("spec")
+            if isinstance(spec, dict):
+                try:
+                    spec = CapabilitySpec(**spec)
+                except Exception:  # noqa: BLE001
+                    spec = CapabilitySpec(purpose=s.get("description") or "")
+            else:
+                spec = None
             steps.append(
                 PlanStep(
                     id=f"s{i}",
                     capability=name,
                     description=s.get("description") or "",
                     params=params,
-                    spec=CapabilitySpec(**spec) if isinstance(spec, dict) else None,
+                    spec=spec,
                     for_each=s.get("for_each") or None,
                 )
             )
