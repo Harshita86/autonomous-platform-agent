@@ -175,6 +175,13 @@ def generalize(instruction: str, plan: Plan) -> str | None:
             return
         if value.lower() not in lowered:
             return  # not taken from the wording (e.g. a default team)
+        # A field like 'description' often just restates the instruction almost
+        # in full. Treated as a slot, it swallowed the whole sentence (being the
+        # longest candidate), which then made the title's much shorter span
+        # unfindable in what was left and silently discarded the entire pattern.
+        # A genuine slot is a narrow extraction, not most of the sentence.
+        if len(value) > 0.7 * len(instruction):
+            return
         existing = next((f for f in found if f["value"].lower() == value.lower()), None)
         if existing:
             existing["targets"].append(target)
@@ -264,8 +271,17 @@ def _rebind(plan_json: str, bound: dict, new_instruction: str,
     # incompletely masked pattern (one that missed a value nested in a list) once
     # produced a plan that resolved one label and attached a different one; this
     # check refuses reuse in that situation instead of trusting the mask.
+    #
+    # One field legitimately restates almost the whole instruction rather than
+    # extracting a short piece of it — a description generated as "Log a defect
+    # about X" for the old wording. generalize() deliberately does not mask that
+    # (masking it would swallow the pattern and block every shorter slot), so it
+    # is never rebound and is stale by construction, not by a masking bug. Such a
+    # field is refreshed to the new instruction; anything else stale is a genuine
+    # leak and still blocks reuse.
     old_lower = (old_instruction or "").lower()
     new_lower = new_instruction.lower()
+    restatement_floor = 0.7 * len(old_instruction or "")
 
     def stale(value) -> bool:
         if isinstance(value, list):
@@ -276,8 +292,11 @@ def _rebind(plan_json: str, bound: dict, new_instruction: str,
         return v in old_lower and v not in new_lower
 
     for step in plan.steps:
-        if any(stale(v) for v in step.params.values()):
-            return None
+        for key, value in list(step.params.items()):
+            if isinstance(value, str) and stale(value) and len(value) >= restatement_floor:
+                step.params[key] = new_instruction
+            elif stale(value):
+                return None
     return plan.model_copy(update={"instruction": new_instruction})
 
 

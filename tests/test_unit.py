@@ -288,3 +288,83 @@ def test_unresolvable_placeholder_names_what_was_available():
     with pytest.raises(LinearError) as exc:
         build_variables({"id": "{{nope}}"}, {}, {}, {"team_id": "x"})
     assert "available" in str(exc.value)
+
+
+def test_param_value_that_is_itself_a_step_placeholder_resolves_via_context():
+    """The planner wrote params={'issue_id': '{create_issue}', ...} instead of a
+    plain identifier. Trusting that literal sent the text '{create_issue}' to
+    Linear as an id, which failed as 'Entity not found: Issue' and triggered an
+    unnecessary rollback of a real issue."""
+    from agent.synthesizer import build_variables
+    out = build_variables(
+        {"id": "{{issue_id}}", "input": {"priority": "{{priority}}"}},
+        {"priority": {"high": 2}},
+        {"issue_id": "{create_issue}", "priority": "High"},
+        {"issue_id": "real-uuid-here"},
+    )
+    assert out["id"] == "real-uuid-here"
+    assert out["input"]["priority"] == 2
+
+
+def test_ordinary_literal_param_values_still_pass_through_untouched():
+    from agent.synthesizer import build_variables
+    out = build_variables({"title": "{{title}}"}, {}, {"title": "a plain title"}, {})
+    assert out["title"] == "a plain title"
+
+
+def test_a_description_restating_the_instruction_does_not_block_the_title_slot():
+    """The description param often nearly repeats the whole instruction. Treated
+    as the longest slot it swallowed the entire sentence, so the title's shorter
+    span could no longer be found and generalize() silently returned None,
+    meaning nothing was learned from that run at all."""
+    instruction = "log a defect about the notification delay problem"
+    plan = Plan(
+        instruction=instruction,
+        intent=IntentSignature(action="create", entity="issue"),
+        steps=[PlanStep(id="s0", capability="create_issue", params={
+            "title": "Notification delay problem",
+            "description": "Log a defect about the notification delay problem",
+        })],
+    )
+    gen = generalize(instruction, plan)
+    assert gen is not None
+    bound = match_generalized(gen, "log a defect about the search index corruption problem")
+    assert bound is not None
+
+
+def test_restatement_field_is_refreshed_not_treated_as_a_leak():
+    """A description restating almost the whole old instruction is correctly left
+    unmasked (masking it would swallow the pattern), but that made it stale by
+    construction and the safety net blocked every reuse of this plan shape. It
+    should be refreshed to the new instruction instead of blocking reuse."""
+    old = "log a defect about the cart total mismatch problem"
+    new = "log a defect about the shipping calculator crash problem"
+    plan = Plan(
+        instruction=old,
+        intent=IntentSignature(action="create", entity="issue"),
+        steps=[PlanStep(id="s0", capability="create_issue", params={
+            "title": "Cart total mismatch problem",
+            "description": "Log a defect about the cart total mismatch problem",
+        })],
+    )
+    gen = generalize(old, plan)
+    bound = match_generalized(gen, new)
+    assert bound is not None
+    reused = _rebind(plan.model_dump_json(), bound, new, old)
+    assert reused is not None
+    assert reused.steps[0].params["title"] == "shipping calculator crash problem"
+    assert "cart total mismatch" not in reused.steps[0].params["description"].lower()
+
+
+def test_a_genuine_short_leak_still_blocks_reuse():
+    """The floor only forgives near-full-sentence restatements. A short stale
+    fragment (the original masking-bug scenario) must still refuse reuse."""
+    reused = _rebind(
+        Plan(instruction="x", intent=IntentSignature(action="create", entity="issue"),
+             steps=[PlanStep(id="s0", capability="create_issue",
+                             params={"labels": ["Bug"]})]).model_dump_json(),
+        {"values": {}, "slots": []},
+        "create an issue titled 'y'",
+        "create a bug titled 'x' with label Bug",
+    )
+    assert reused is None  # a short leaked fragment still refuses reuse

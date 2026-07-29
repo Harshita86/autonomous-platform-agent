@@ -255,14 +255,35 @@ class MemoryStore:
             ),
         )
 
-    def successful_patterns(self, limit: int = 40) -> list[sqlite3.Row]:
-        """Learned sentence patterns from successful runs, cheapest first, so plan
-        reuse prefers the decomposition that cost the least."""
-        return self._db.execute(
+    def successful_patterns(self, limit: int = 200) -> list[sqlite3.Row]:
+        """Learned sentence patterns from successful runs, one per distinct pattern,
+        cheapest first.
+
+        A LIMIT applied before deduplication let repeats of one heavily-used
+        pattern fill every slot, so a genuinely new pattern learned minutes ago
+        was never even offered to the matcher — cheap-but-irrelevant history
+        crowded out relevant history. Distinct patterns are cheap to tell apart
+        (a substring of gen_template) and there are far fewer of them than there
+        are episodes, so dedup first and cap the result after.
+        """
+        rows = self._db.execute(
             "SELECT * FROM episodes WHERE outcome='success' AND gen_template IS NOT NULL "
-            "ORDER BY api_calls ASC, llm_calls ASC, id DESC LIMIT ?",
-            (limit,),
+            "ORDER BY api_calls ASC, llm_calls ASC, id DESC"
         ).fetchall()
+        seen: set[str] = set()
+        out: list[sqlite3.Row] = []
+        for row in rows:
+            try:
+                key = json.loads(row["gen_template"])["pattern"]
+            except Exception:  # noqa: BLE001 — an unparseable pattern is simply skipped
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(row)
+            if len(out) >= limit:
+                break
+        return out
 
     # --- procedural store: capabilities as data, versioned ---
     def get_capability(self, name: str) -> sqlite3.Row | None:

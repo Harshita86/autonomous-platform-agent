@@ -180,9 +180,24 @@ def build_variables(
         "create_issue": "issue_id",
     }
 
-    def lookup(name: str):
+    placeholder_in_value = re.compile(r"^\{\{?\s*([\w.]+)\s*\}?\}$")
+
+    def lookup(name: str, _seen: frozenset = frozenset()):
         if name in params and params[name] is not None:
-            return params[name], True
+            value = params[name]
+            # The planner sometimes writes a param whose VALUE is itself an
+            # unresolved placeholder naming a step, e.g. issue_id: "{create_issue}",
+            # rather than the plain identifier "issue_id" used as a template key.
+            # Trusting the param literally here sent the text "{create_issue}" to
+            # Linear as an id, which failed as 'Entity not found: Issue'. Recurse
+            # into ctx once for that shape instead of taking it at face value.
+            if isinstance(value, str) and name not in _seen:
+                m = placeholder_in_value.fullmatch(value.strip())
+                if m:
+                    inner, found = lookup(m.group(1), _seen | {name})
+                    if found:
+                        return inner, True
+            return value, True
         if name in ctx:
             return ctx[name], True
         alias = step_aliases.get(name)
